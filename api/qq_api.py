@@ -21,6 +21,7 @@ class QQAPIPaths:
     GET_FRIEND_INFO="/get_stranger_info"
     GET_GROUP_INFO="/get_group_info"
     DELETE_FRIEND="/delete_friend"
+    GET_STATUS="/get_status"
     
     @classmethod
     def get_path(cls, name: str) -> Optional[str]:
