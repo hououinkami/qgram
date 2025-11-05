@@ -1,0 +1,45 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    restart: always
+    mac_address: 02:42:ac:11:00:02  # 添加MAC地址固化配置
+    
+    environment:
+      - NAPCAT_UID=1000
+      - NAPCAT_GID=1000
+    
+    ports:
+      - 3001:3001
+      - 6099:6099
+    
+    volumes:
+      - ./napcat/config:/app/napcat/config
+      - ./ntqq:/app/.config/QQ
+      - ./download:/app/download
+
+  qgram:
+    image: hououinkami/qgram:latest
+    build:
+      context: ../qgram_docker
+      dockerfile: Dockerfile
+    container_name: qgram
+    volumes:
+      - ./sessions:/app/sessions  # TG登录信息
+      - ./download:/app/download  # 媒体下载文件夹
+      - ./logs:/app/logs  # 日志
+      - ./database:/app/database # 数据库
+    env_file:
+      - .env
+    restart: unless-stopped
+
+  qgram-login:
+    image: hououinkami/qgram:latest
+    container_name: qgram-login
+    volumes:
+      - ./sessions:/app/sessions
+    env_file:
+      - .env
+    command: /app/tglogin.py
+    profiles:
+      - login

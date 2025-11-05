@@ -1,0 +1,8 @@
+.DS_Store
+/logs
+/download
+/msgid
+test.py
+contact.json
+sticker.json
+/sessions
