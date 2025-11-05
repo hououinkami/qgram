@@ -7,12 +7,15 @@ from typing import Any, Dict, Set
 from aiohttp import web
 
 import config
+from config import LOCALE as locale
+from api.qq_api import qq_api
 from api.telegram_sender import telegram_sender
 from service.telethon_client import get_user_id
 from utils.qq_to_telegram import process_callback_message
 
 logger = logging.getLogger(__name__)
 
+NAPCAT_CALLBACK_PATH = config.NAPCAT_CALLBACK_PATH
 NAPCAT_CALLBACK_PORT = config.NAPCAT_CALLBACK_PORT
 
 class MessageDeduplicator:
@@ -238,17 +241,19 @@ async def cleanup_idle_processors():
 # 登陆检测
 login_status = None
 
-async def login_check(callback_data):
+async def login_check():
     """异步登录检测"""
     global login_status
     
-    current_message = callback_data.get('Message')
+    status_response = await qq_api("GET_STATUS", {})
+    status_data = status_response.get('data', {})
+    status = status_data.get('online') and status_data.get('good')
     
     tg_user_id = get_user_id()
-    if current_message == "用户可能退出":
+    if not status:
         # 只有当上一次状态不是离线时才发送离线提示
         if login_status != "offline":
-            await telegram_sender.send_text(tg_user_id, "离线")
+            await telegram_sender.send_text(tg_user_id, locale.common('offline'))
             login_status = "offline"
         return {"success": True, "message": "用户可能退出"}
     
@@ -256,7 +261,7 @@ async def login_check(callback_data):
         # 当前不是离线状态
         # 如果上一次是离线状态，发送上线提示
         if login_status == "offline":
-            await telegram_sender.send_text(tg_user_id, "上线")
+            await telegram_sender.send_text(tg_user_id, locale.common('online'))
         login_status = "online"
         return {"success": True, "message": "正常状态"}
 
@@ -408,8 +413,8 @@ async def create_app():
     app = web.Application(middlewares=[cors_middleware])
     
     # 添加路由 - 移除路径检查，因为路由已经处理了
-    app.router.add_post(f"/callback", handle_message)
-    app.router.add_options(f"/callback", handle_options)
+    app.router.add_post(NAPCAT_CALLBACK_PATH, handle_message)
+    app.router.add_options(NAPCAT_CALLBACK_PATH, handle_options)
     
     # 添加健康检查路由
     async def health_check(request):
@@ -432,7 +437,7 @@ async def run_server():
         site = web.TCPSite(runner, '0.0.0.0', NAPCAT_CALLBACK_PORT)
         await site.start()
         
-        logger.info(f"✅ NapCat消息服务启动, 端口: {NAPCAT_CALLBACK_PORT}, 路径: /callback")
+        logger.info(f"✅ NapCat消息服务启动, 端口: {NAPCAT_CALLBACK_PORT}, 路径: {NAPCAT_CALLBACK_PATH}")
         
         # 保持服务运行
         try:
@@ -467,8 +472,8 @@ async def run_server():
 async def main():
     """异步主函数"""    
     # 检查配置
-    if not NAPCAT_CALLBACK_PORT:
-        logger.error("❌ NAPCAT_PORT 配置不能为空")
+    if not NAPCAT_CALLBACK_PATH or not NAPCAT_CALLBACK_PORT:
+        logger.error("❌ NAPCAT_CALLBACK 配置不能为空")
         return
     
     # 启动异步服务器

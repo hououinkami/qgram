@@ -27,6 +27,9 @@ WEBHOOK_DOMAIN = os.getenv("WEBHOOK_DOMAIN")
 WEBHOOK_PORT = os.getenv("WEBHOOK_PORT", 8443)
 SSL_CERT_NAME = os.getenv("SSL_CERT_NAME", "cert.pem")
 SSL_KEY_NAME = os.getenv("SSL_KEY_NAME", "key.pem")
+
+# NapCat
+NAPCAT_CALLBACK_PATH = os.getenv("NAPCAT_CALLBACK_PORT", "/callback")
 NAPCAT_CALLBACK_PORT = os.getenv("NAPCAT_CALLBACK_PORT", 3000)
 NAPCAT_API_URL = os.getenv("NAPCAT_API_URL", "http://napcat:3001")
 MY_QQ_ID = os.getenv("MY_QQ_ID")
