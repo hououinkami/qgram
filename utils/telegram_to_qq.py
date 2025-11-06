@@ -17,8 +17,7 @@ from service.telethon_client import get_client
 from utils import tools
 from utils.contact_manager import contact_manager
 from utils.message_mapper import msgid_mapping
-# from utils.sticker_converter import converter
-# from utils.sticker_mapper import get_sticker_info
+from utils.sticker_converter import converter
 
 logger = logging.getLogger(__name__)
 
@@ -208,18 +207,14 @@ async def _send_telegram_video(to_id: str, is_group: bool, video, chat_id, telet
     duration = video.duration
     
     try:
-        thumb_base64 = await tools.telegram_file_to_base64_by_file_id(thumb_file_id)
-        video_base64 = await tools.telegram_file_to_base64(video, int(chat_id), telethon_msg_id)
-
-        payload = {
-            "Base64": video_base64,
-            "ImageBase64": thumb_base64,
-            "PlayLength": int(duration),
-            "ToWxid": to_id,
-            "Wxid": config.MY_WXID
-        }
+        download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
+        file_dir = os.path.join(download_dir, "video")
+        file_path = await tools.telegram_file_to_path(file_id, file_dir)
         
-        return await qq_api("SEND_VIDEO", payload, timeout=300)
+        api = send_api(to_id, is_group, [("video", "file", file_path)])
+        
+        return await qq_api(api.api_path, api.payload)
+    
     except Exception as e:
         logger.error(f"处理视频时出错: {e}")
         return False
@@ -232,73 +227,40 @@ async def _send_telegram_sticker(to_id: str, is_group: bool, sticker) -> bool:
     
     # 提取贴纸的file_unique_id
     file_unique_id = sticker.file_unique_id
-    try:
-        sticker_info = get_sticker_info(file_unique_id)
-        payload = {}
+    try:        
+        # 下载并转换
+        try:
+            # 下载贴纸
+            sticker_path = await _download_telegram_sticker(sticker)
 
-        if sticker_info:
-            md5 = sticker_info.get("md5", "")
-            len = int(sticker_info.get("size", 0))
-            name = sticker_info.get("name", "")
+            # 根据文件类型选择转换方法
+            file_extension = Path(sticker_path).suffix
+            gif_path = None
+            
+            if file_extension == '.tgs':
+                # TGS 动画贴纸
+                gif_path = await converter.tgs_to_gif(sticker_path)
+            
+            elif file_extension == '.webm':
+                # WebM 视频贴纸处理
+                gif_path = await converter.webm_to_gif(sticker_path)
+
+            elif file_extension == '.webp':
+                # WebP 可能是动画也可能是静态
+                gif_path = await converter.webp_to_gif(sticker_path)
+            
+            if not gif_path:
+                logger.error(f"转换失败: {sticker_path}")
+                return False            
+            
+        except Exception as e:
+            logger.error(f"下载并转换贴纸失败: {e}")
+            return False
         
-            payload = {
-                "Md5": md5,
-                "ToWxid": to_id,
-                "TotalLen": len,
-                "Wxid": config.MY_WXID
-            }
-        else:
-            # 下载并转换
-            try:
-                # 下载贴纸
-                sticker_path = await _download_telegram_sticker(sticker)
-
-                # 根据文件类型选择转换方法
-                file_extension = Path(sticker_path).suffix
-                gif_path = None
-                
-                if file_extension == '.tgs':
-                    # TGS 动画贴纸
-                    gif_path = await converter.tgs_to_gif(sticker_path)
-                
-                elif file_extension == '.webm':
-                    # WebM 视频贴纸处理
-                    gif_path = await converter.webm_to_gif(sticker_path)
-
-                elif file_extension == '.webp':
-                    # WebP 可能是动画也可能是静态
-                    gif_path = await converter.webp_to_gif(sticker_path)
-                
-                if not gif_path:
-                    logger.error(f"转换失败: {sticker_path}")
-                    return False
-                
-                # 转换成功，准备发送
-                # sticker_base64 = tools.local_file_to_base64(gif_path)
-                # if not sticker_base64:
-                #     logger.error("转换贴纸文件为base64失败")
-                #     return False
-                    
-                payload = {
-                    "Md5": "",
-                    "TotalLen": 0,
-                    # "Base64": sticker_base64,
-                    "ToWxid": to_id,
-                    "Wxid": config.MY_WXID
-                }
-                
-            except Exception as e:
-                logger.error(f"下载并转换贴纸失败: {e}")
-                return False
+        # 执行发送操作        
+        api = send_api(to_id, is_group, [("image", "file", gif_path)])
         
-        # 执行发送操作
-        result = await qq_api("SEND_EMOJI", payload)
-
-        if result.get("Data", {}):
-            return result
-        else:
-            err_msg = result.get("Message", {})
-            logger.error(f"贴纸发送失败: {err_msg}")
+        return await qq_api(api.api_path, api.payload)  
     
     except Exception as e:
         logger.error(f"处理贴纸时出错: {e}")
@@ -331,29 +293,15 @@ async def _send_telegram_voice(to_id: str, is_group: bool, voice):
             return False
         
         # 2. 转换为SILK格式
-        silk_path = None
+        silk_path = await _convert_voice_to_silk(local_voice_path, file_id, voice_dir)
         if not silk_path:
             logger.error("转换语音文件为SILK格式失败")
             return False
-        
-        # 3. 生成base64
-        silk_base64 = tools.local_file_to_base64(silk_path)
-        if not silk_base64:
-            logger.error("转换SILK文件为base64失败")
-            return False
 
-        # 4. 发送SILK语音到微信
-        voice_time = duration * 1000 if duration > 0 else 1000 # 如果微信API需要毫秒
+        # 3. 发送语音到微信        
+        api = send_api(to_id, is_group, [("record", "file", file_path)])
         
-        payload = {
-            "Base64": silk_base64,
-            "ToWxid": to_id,
-            "Type": 4,
-            "VoiceTime": voice_time,
-            "Wxid": config.MY_WXID
-        }
-        
-        return await qq_api("SEND_VOICE", payload)
+        return await qq_api(api.api_path, api.payload)
     
     except Exception as e:
         logger.error(f"处理Telegram语音消息失败: {e}")
@@ -387,31 +335,13 @@ async def _send_telegram_document(to_id: str, is_group: bool, document) -> bool:
         file_size = document.file_size
         mime_type = document.mime_type
         
-        # 检查文件大小限制
-        max_size = 50 * 1024 * 1024  # 50MB
-        if file_size and file_size > max_size:
-            logger.error(f"文件太大: {file_size} bytes (限制: {max_size} bytes)")
-            return False
+        download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
+        file_dir = os.path.join(download_dir, "file")
+        file_path = await tools.telegram_file_to_path(file_id, file_dir)
         
-        # 下载文件并转换为base64
-        file_base64 = await tools.telegram_file_to_base64_by_file_id(file_id)
-        if not file_base64:
-            logger.error("获取文件base64失败")
-            return False
+        api = send_api(to_id, is_group, [("file", "file", file_path)])
         
-        # if not file_base64.startswith('data:'):
-        #     # 如果没有数据URL前缀，添加它
-        #     file_base64 = f"data:{mime_type or 'application/octet-stream'};base64,{file_base64}"
-        
-        # 构建发送载荷
-        payload = {
-            "Wxid": config.MY_WXID,
-            "fileData": file_base64
-        }
-        
-        upload_file = await qq_api("UPLOAD_FILE", payload)
-        logger.warning(upload_file)
-        return upload_file
+        return await qq_api(api.api_path, api.payload)
         
     except Exception as e:
         logger.error(f"处理文档时出错: {e}")
@@ -474,7 +404,6 @@ async def _send_telegram_reply(to_id: str, is_group: bool, message):
         logger.error(f"处理回复消息时出错: {e}")
         return False
 
-
 async def _send_telegram_link(to_id: str, is_group: bool, message):
     """处理链接信息"""
     text = message.text
@@ -500,15 +429,25 @@ async def _send_telegram_link(to_id: str, is_group: bool, message):
             link_desc = link_url
         
         if link_title and link_url:
-            text = f"<appmsg><title>{link_title}</title><des>{link_desc}</des><type>5</type><url>{link_url}</url><thumburl></thumburl></appmsg>"
 
-        payload = {
-            "ToWxid": to_id,
-            "Type": 49,
-            "Wxid": config.MY_WXID,
-            "Xml": text
-        }
-        return await qq_api('SEND_APP', payload)
+            import json
+
+            data = {
+                "meta": {
+                    "news": {
+                        "desc": link_desc,
+                        "jumpUrl": link_url, 
+                        "title": link_title
+                    }
+                },
+                "view": "news"
+            }
+            text = json.dumps(data, ensure_ascii=False)
+
+
+        api = send_api(to_id, is_group, [("json", "data", text)])
+
+        return await qq_api(api.api_path, api.payload)
 
 async def revoke_by_telegram_bot_command(chat_id, message):
     try:
@@ -534,7 +473,6 @@ async def revoke_by_telegram_bot_command(chat_id, message):
         
     except Exception as e:
         logger.error(f"处理消息删除逻辑时出错: {e}")
-
 
 async def _download_telegram_voice(file_id: str, voice_dir: str) -> str:
     """
@@ -638,6 +576,134 @@ async def _download_telegram_sticker(sticker) -> str:
     except Exception as e:
         logger.error(f"下载贴纸失败: {e}")
         return None
+
+async def _convert_voice_to_silk(input_path: str, file_id: str, voice_dir: str) -> Optional[str]:
+    """
+    异步将语音文件转换为SILK格式
+    
+    Args:
+        input_path: 输入语音文件路径
+        file_id: 文件ID（用于生成输出文件名）
+        voice_dir: 输出目录
+        
+    Returns:
+        Optional[str]: 转换成功返回SILK文件路径，失败返回None
+    """
+    pcm_path = None
+    
+    def _ffmpeg_convert(input_path: str, pcm_path: str) -> bool:
+        """在线程中执行ffmpeg转换"""
+        try:
+            (
+                ffmpeg
+                .input(input_path)
+                .output(
+                    pcm_path,
+                    format='s16le',          # 输出格式：16位小端PCM
+                    acodec='pcm_s16le',      # 音频编码器
+                    ar=44100,                # 采样率44100Hz
+                    ac=1                     # 单声道
+                )
+                .overwrite_output()          # 覆盖输出文件
+                .run(quiet=True)             # 静默运行，不输出到控制台
+            )
+            return True
+        except ffmpeg.Error as e:
+            logger.error(f"ffmpeg转换失败: {e.stderr.decode() if e.stderr else str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"ffmpeg转换过程中出现异常: {e}")
+            return False
+    
+    def _pilk_convert(pcm_path: str, silk_path: str) -> Optional[float]:
+        """在线程中执行pilk转换"""
+        try:
+            silk_duration = pilk.encode(
+                pcm_path, 
+                silk_path, 
+                pcm_rate=44100, 
+                tencent=True
+            )
+            return silk_duration
+        except Exception as e:
+            logger.error(f"pilk转换失败: {e}")
+            return None
+    
+    def _file_exists_and_size(file_path: str) -> tuple[bool, int]:
+        """检查文件是否存在并返回大小"""
+        if os.path.exists(file_path):
+            return True, os.path.getsize(file_path)
+        return False, 0
+    
+    def _remove_file(file_path: str) -> bool:
+        """删除文件"""
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                return True
+        except Exception as e:
+            logger.warning(f"删除文件失败 {file_path}: {e}")
+        return False
+    
+    try:
+        # 1. 准备文件路径
+        pcm_filename = f"{file_id}.pcm"
+        pcm_path = os.path.join(voice_dir, pcm_filename)
+        silk_filename = f"{file_id}.silk"
+        silk_path = os.path.join(voice_dir, silk_filename)
+        
+        # 确保输出目录存在
+        await asyncio.to_thread(os.makedirs, voice_dir, exist_ok=True)
+        
+        # 2. 异步执行ffmpeg转换
+        ffmpeg_success = await asyncio.to_thread(_ffmpeg_convert, input_path, pcm_path)
+        
+        if not ffmpeg_success:
+            return None
+        
+        # 验证PCM文件
+        pcm_exists, pcm_size = await asyncio.to_thread(_file_exists_and_size, pcm_path)
+        if not pcm_exists:
+            logger.error("PCM文件未生成")
+            return None
+        
+        if pcm_size == 0:
+            logger.error("PCM文件为空")
+            await asyncio.to_thread(_remove_file, pcm_path)
+            return None
+        
+        # 3. 异步执行SILK转换
+        silk_duration = await asyncio.to_thread(_pilk_convert, pcm_path, silk_path)
+        
+        if silk_duration is None:
+            return None
+        
+        # 验证SILK文件
+        silk_exists, silk_size = await asyncio.to_thread(_file_exists_and_size, silk_path)
+        if not silk_exists:
+            logger.error("SILK文件未生成")
+            return None
+        
+        if silk_size == 0:
+            logger.error("SILK文件为空")
+            await asyncio.to_thread(_remove_file, silk_path)
+            return None
+        
+        return silk_path
+        
+    except Exception as e:
+        logger.error(f"转换过程中出现异常: {e}")
+        logger.error(traceback.format_exc())
+        return None
+    finally:
+        # 异步清理PCM临时文件
+        if pcm_path:
+            try:
+                removed = await asyncio.to_thread(_remove_file, pcm_path)
+                if removed:
+                    logger.debug(f"清理PCM临时文件: {pcm_path}")
+            except Exception as e:
+                logger.warning(f"清理PCM临时文件失败 {pcm_path}: {e}")
 
 # 添加msgid映射
 async def add_send_msgid(qq_api_response, tg_msgid, telethon_msg_id: int = 0, to_id: str = None):
