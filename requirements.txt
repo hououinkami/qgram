@@ -16,7 +16,7 @@ aiosqlite==0.21.0
 # 媒体处理
 ffmpeg-python==0.2.0
 Pillow==11.3.0
-# pilk==0.2.4
+pilk==0.2.4
 
 # 消息队列
 aio-pika==9.5.5
