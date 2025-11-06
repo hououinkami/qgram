@@ -399,7 +399,7 @@ async def _forward_mixed(chat_id: int, sender_info: str, message_data: Dict[str,
         raise
 
 async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[str, Any]) -> None:
-    """处理QQ转发消息"""
+    """处理QQ转发消息（支持嵌套转发）"""
     try:
         # 获取转发消息的内容数组
         msg_id = message_data.get('content', 0)
@@ -409,8 +409,7 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
         }
 
         forward_json = await qq_api("GET_FORWARD", payload)
-
-        forward_content = forward_json.get("data", {}).get("messages",[])
+        forward_content = forward_json.get("data", {}).get("messages", [])
         
         if not forward_content:
             logger.warning("转发消息内容为空")
@@ -419,14 +418,39 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                 f"{sender_info}\n[{locale.type('forward')}]"
             )
         
+        # 递归处理转发内容
+        return await _process_forward_content(chat_id, sender_info, forward_content, depth=0)
+        
+    except Exception as e:
+        logger.error(f"❌ 转发消息处理失败: {e}", exc_info=True)
+        fallback_text = f"{sender_info}\n[转发消息处理失败]"
+        return await telegram_sender.send_text(chat_id, fallback_text)
+
+async def _process_forward_content(chat_id: int, sender_info: str, forward_content: list, depth: int = 0) -> None:
+    """递归处理转发内容"""
+    try:
+        # 限制递归深度，防止无限嵌套
+        MAX_DEPTH = 5
+        if depth > MAX_DEPTH:
+            logger.warning(f"转发嵌套深度超过限制 ({MAX_DEPTH})，停止递归")
+            return await telegram_sender.send_text(
+                chat_id, 
+                f"[合并转发嵌套过深，已省略 (深度: {depth})]"
+            )
+        
         # 构建预览文本和收集媒体文件
         preview_title = []
         preview_lines = []
-        preview_title.append(f"[{locale.type('forward')}]")
-        preview_title.append(f"件数: {len(forward_content)}")
+        
+        # 根据嵌套深度调整标题
+        indent = "  " * depth  # 缩进表示嵌套层级
+        depth_tip = f" (层级: {depth + 1})" if depth > 0 else ""
+        preview_title.append(f"{indent}[{locale.type('forward')}]{depth_tip}")
+        preview_title.append(f"{indent}件数: {len(forward_content)}")
         
         all_media = []  # 收集所有媒体文件（图片和视频）
         media_counter = 0  # 媒体文件计数器
+        nested_forwards = []  # 收集嵌套的转发消息
         
         # 遍历所有转发的消息，生成预览
         for idx, forwarded_msg in enumerate(forward_content, 1):
@@ -443,21 +467,29 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                 
                 # 根据消息类型生成预览文本
                 if content_type == 'forward':
-                    # 嵌套转发只显示提示
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append(f"[{locale.type('forward')}]")
+                    # 嵌套转发 - 收集起来稍后递归处理
+                    nested_forward_id = forwarded_message_data.get('content', 0)
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}[{locale.type('forward')}] (嵌套)")
+                    
+                    # 收集嵌套转发信息
+                    nested_forwards.append({
+                        'msg_id': nested_forward_id,
+                        'sender': display_name,
+                        'depth': depth + 1
+                    })
                     
                 elif content_type == 'image':
                     # 单张图片
                     image_url = forwarded_message_data.get('content', '')
                     text_content = forwarded_message_data.get('text', '')
                     
-                    preview_lines.append(f"👤{display_name}: ")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
                     if text_content:
-                        preview_lines.append(text_content)
+                        preview_lines.append(f"{indent}{text_content}")
                     
                     media_counter += 1
-                    preview_lines.append(f"[写真]{media_counter}")
+                    preview_lines.append(f"{indent}[写真]{media_counter}")
                     
                     # 收集图片URL
                     if image_url:
@@ -465,7 +497,8 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                             'type': 'photo',
                             'url': image_url,
                             'sender': display_name,
-                            'text': text_content
+                            'text': text_content,
+                            'depth': depth
                         })
                         
                 elif content_type == 'images':
@@ -473,19 +506,20 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                     image_list = forwarded_message_data.get('content', [])
                     text_content = forwarded_message_data.get('text', '')
                     
-                    preview_lines.append(f"👤{display_name}: ")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
                     if text_content:
-                        preview_lines.append(text_content)
+                        preview_lines.append(f"{indent}{text_content}")
                     
                     # 为每张图片添加预览和收集URL
                     for img_info in image_list:
                         media_counter += 1
-                        preview_lines.append(f"[{locale.type('image')}]{media_counter}")
+                        preview_lines.append(f"{indent}[{locale.type('image')}]{media_counter}")
                         all_media.append({
                             'type': 'photo',
                             'url': img_info.get('url', ''),
                             'sender': display_name,
-                            'text': text_content if len(image_list) == 1 else ''  # 只有单图时才添加文本
+                            'text': text_content if len(image_list) == 1 else '',
+                            'depth': depth
                         })
                         
                 elif content_type == 'video':
@@ -493,12 +527,12 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                     video_url = forwarded_message_data.get('content', '')
                     text_content = forwarded_message_data.get('text', '')
                     
-                    preview_lines.append(f"👤{display_name}: ")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
                     if text_content:
-                        preview_lines.append(text_content)
+                        preview_lines.append(f"{indent}{text_content}")
                     
                     media_counter += 1
-                    preview_lines.append(f"[{locale.type('video')}]{media_counter}")
+                    preview_lines.append(f"{indent}[{locale.type('video')}]{media_counter}")
                     
                     # 收集视频URL
                     if video_url:
@@ -506,53 +540,62 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                             'type': 'video',
                             'url': video_url,
                             'sender': display_name,
-                            'text': text_content
+                            'text': text_content,
+                            'depth': depth
                         })
                         
                 elif content_type == 'text':
                     # 文本消息
                     message_content = forwarded_message_data.get('content', '')
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append(message_content)
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}{message_content}")
                     
                 elif content_type == 'sticker':
                     # 表情包
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append("[{locale.type('sticker')}]")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}[{locale.type('sticker')}]")
                     
                 elif content_type == 'voice':
                     # 语音消息
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append("[{locale.type('voice')}]")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}[{locale.type('voice')}]")
                     
                 elif content_type == 'file':
                     # 文件消息
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append("[{locale.type('file')}]")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}[{locale.type('file')}]")
                     
                 elif content_type == 'reply':
                     # 回复消息
                     text_content = forwarded_message_data.get('content', '')
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append(f"[{locale.type('reply')}] {text_content}")
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}[{locale.type('reply')}] {text_content}")
                     
                 else:
                     # 其他类型消息
                     message_content = forwarded_message_data.get('content', f"[{locale.type('unknown')}]")
-                    preview_lines.append(f"👤{display_name}: ")
-                    preview_lines.append(message_content)
+                    preview_lines.append(f"{indent}👤{display_name}: ")
+                    preview_lines.append(f"{indent}{message_content}")
                     
             except Exception as e:
                 logger.error(f"❌ 处理第{idx}条转发消息预览失败: {e}")
-                preview_lines.append(f"👤未知用户: ")
-                preview_lines.append(f"[第{idx}条消息处理失败]")
+                preview_lines.append(f"{indent}👤未知用户: ")
+                preview_lines.append(f"{indent}[第{idx}条消息处理失败]")
         
         # 构建完整的预览文本
-        preview_title.append(f"媒体: {media_counter}")
+        preview_title.append(f"{indent}媒体: {media_counter}")
+        if nested_forwards:
+            preview_title.append(f"{indent}嵌套转发: {len(nested_forwards)}")
+        
         preview_text = "\n".join(preview_title + preview_lines)
         
         # 发送预览消息（使用折叠引用块）
-        forward_preview = f"{sender_info}\n<blockquote expandable>{preview_text}\n</blockquote>"
+        if depth == 0:
+            # 顶层转发包含发送者信息
+            forward_preview = f"{sender_info}\n<blockquote expandable>{preview_text}\n</blockquote>"
+        else:
+            # 嵌套转发不重复发送者信息
+            forward_preview = f"<blockquote expandable>{preview_text}\n</blockquote>"
         
         preview_response = None
         
@@ -565,7 +608,7 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                 photo_count = sum(1 for media in all_media if media['type'] == 'photo')
                 video_count = sum(1 for media in all_media if media['type'] == 'video')
                 
-                logger.info(f"开始下载 {len(all_media)} 个媒体文件 (图片: {photo_count}, 视频: {video_count})...")
+                logger.info(f"开始下载 {len(all_media)} 个媒体文件 (图片: {photo_count}, 视频: {video_count}) [深度: {depth}]...")
                 
                 # 分批处理媒体文件（每批最多10个）
                 BATCH_SIZE = 10
@@ -576,7 +619,7 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                     end_idx = min(start_idx + BATCH_SIZE, len(all_media))
                     batch_media = all_media[start_idx:end_idx]
                     
-                    logger.info(f"处理第 {batch_idx + 1}/{total_batches} 批媒体文件 ({len(batch_media)} 个)")
+                    logger.info(f"处理第 {batch_idx + 1}/{total_batches} 批媒体文件 ({len(batch_media)} 个) [深度: {depth}]")
                     
                     media_group = []
                     
@@ -605,7 +648,8 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                                 # 其他批次第一个文件：批次信息
                                 start_num = batch_idx * 10 + 1
                                 end_num = min(batch_idx * 10 + 10, media_counter)
-                                caption = f"<blockquote>[{locale.type('forward')}] ({start_num} ~ {end_num})</blockquote>"
+                                depth_info = f" (层级: {depth + 1})" if depth > 0 else ""
+                                caption = f"<blockquote>[{locale.type('forward')}]{depth_info} ({start_num} ~ {end_num})</blockquote>"
                             
                             # 根据类型创建对应的InputMedia对象
                             if media_type == 'photo':
@@ -626,17 +670,18 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                         if len(media_group) == 1:
                             # 如果只有一个文件，根据类型单独发送
                             media_item = media_group[0]
+                            depth_info = f" (层级: {depth + 1})" if depth > 0 else ""
                             if isinstance(media_item, InputMediaPhoto):
                                 batch_response = await telegram_sender.send_photo(
                                     chat_id,
                                     media_item.media,
-                                    media_item.caption or f"📋 转发消息中的图片 (第 {batch_idx + 1} 批)"
+                                    media_item.caption or f"📋 转发消息中的图片{depth_info} (第 {batch_idx + 1} 批)"
                                 )
                             else:  # InputMediaVideo
                                 batch_response = await telegram_sender.send_video(
                                     chat_id,
                                     media_item.media,
-                                    media_item.caption or f"📋 转发消息中的视频 (第 {batch_idx + 1} 批)"
+                                    media_item.caption or f"📋 转发消息中的视频{depth_info} (第 {batch_idx + 1} 批)"
                                 )
                         else:
                             # 发送媒体组
@@ -646,36 +691,70 @@ async def _forward_forward(chat_id: int, sender_info: str, message_data: Dict[st
                             )
                         
                         # 保存第一批的响应用于消息映射
-                        if batch_idx == 0:
+                        if batch_idx == 0 and depth == 0:
                             preview_response = batch_response
                         
-                        logger.info(f"✅ 成功发送第 {batch_idx + 1} 批 {len(media_group)} 个媒体文件")
+                        logger.info(f"✅ 成功发送第 {batch_idx + 1} 批 {len(media_group)} 个媒体文件 [深度: {depth}]")
                         
                         # 批次间添加小延迟，避免触发限制
                         if batch_idx < total_batches - 1:
                             await asyncio.sleep(1)
                     else:
-                        logger.warning(f"第 {batch_idx + 1} 批媒体文件全部下载失败")
+                        logger.warning(f"第 {batch_idx + 1} 批媒体文件全部下载失败 [深度: {depth}]")
                 
-                logger.info(f"✅ 所有媒体文件发送完成，共 {total_batches} 批")
+                logger.info(f"✅ 媒体文件发送完成，共 {total_batches} 批 [深度: {depth}]")
                 
             except Exception as e:
-                logger.error(f"❌ 发送转发消息媒体文件失败: {e}")
-                error_text = f"❌ 转发消息中的媒体文件发送失败: {str(e)}"
-                preview_response = await telegram_sender.send_text(chat_id, error_text)
+                logger.error(f"❌ 发送转发消息媒体文件失败 [深度: {depth}]: {e}")
+                error_text = f"❌ 转发消息中的媒体文件发送失败 [深度: {depth}]: {str(e)}"
+                if depth == 0:
+                    preview_response = await telegram_sender.send_text(chat_id, error_text)
         else:
             # 没有媒体文件，只发送预览文本
-            preview_response = await telegram_sender.send_text(chat_id, forward_preview)
+            if depth == 0:
+                preview_response = await telegram_sender.send_text(chat_id, forward_preview)
         
-        logger.info(f"✅ 转发消息处理完成，共{len(forward_content)}条消息，{len(all_media)}个媒体文件")
+        # 递归处理嵌套转发
+        for nested_forward in nested_forwards:
+            try:
+                logger.info(f"处理嵌套转发 [深度: {nested_forward['depth']}]: {nested_forward['msg_id']}")
+                
+                # 获取嵌套转发内容
+                payload = {
+                    "message_id": int(nested_forward['msg_id'])
+                }
+                
+                nested_forward_json = await qq_api("GET_FORWARD", payload)
+                nested_forward_content = nested_forward_json.get("data", {}).get("messages", [])
+                
+                if nested_forward_content:
+                    # 递归处理嵌套转发
+                    nested_sender_info = f"🔄 嵌套转发 (来自: {nested_forward['sender']})"
+                    await _process_forward_content(
+                        chat_id, 
+                        nested_sender_info, 
+                        nested_forward_content, 
+                        depth=nested_forward['depth']
+                    )
+                else:
+                    logger.warning(f"嵌套转发内容为空: {nested_forward['msg_id']}")
+                    
+            except Exception as e:
+                logger.error(f"❌ 处理嵌套转发失败 [深度: {nested_forward['depth']}]: {e}")
+                error_text = f"❌ 嵌套转发处理失败 (来自: {nested_forward['sender']}): {str(e)}"
+                await telegram_sender.send_text(chat_id, error_text)
         
-        # 返回预览消息的响应（用于消息映射）
-        return preview_response
+        logger.info(f"✅ 转发消息处理完成 [深度: {depth}]，共{len(forward_content)}条消息，{len(all_media)}个媒体文件，{len(nested_forwards)}个嵌套转发")
+        
+        # 返回预览消息的响应（用于消息映射，只有顶层转发才返回）
+        if depth == 0:
+            return preview_response
         
     except Exception as e:
-        logger.error(f"❌ 转发消息处理失败: {e}", exc_info=True)
-        fallback_text = f"{sender_info}\n[转发消息处理失败]"
-        return await telegram_sender.send_text(chat_id, fallback_text)
+        logger.error(f"❌ 转发内容处理失败 [深度: {depth}]: {e}", exc_info=True)
+        if depth == 0:
+            fallback_text = f"{sender_info}\n[转发消息处理失败]"
+            return await telegram_sender.send_text(chat_id, fallback_text)
 
 async def _get_sender_info(data: Dict[str, Any], is_self_sent: bool = False) -> str:
     """
@@ -816,9 +895,10 @@ async def _process_message_async(message: Dict[str, Any]) -> None:
 
         # 统一处理接收和发送的消息
         if post_type == 'message' or post_type == 'message_sent':
+            
             # 不转发自己
             if post_type == 'message_sent': return
-            
+                
             await _handle_message_event(target_chat_id, message)
             
         elif post_type == 'notice':
@@ -903,18 +983,28 @@ async def _handle_notice_event(chat_id: int, data: Dict[str, Any]):
         
         send_text = None
         
-        if notice_type == 'group_increase':
+        if notice_type == 'group_recall' or notice_type == 'friend_recall':
+            group_id = data.get('group_id', 'unknown')
+            user_id = data.get('user_id', 'unknown')
+            operator_id = data.get('operator_id', 'unknown')
+            message_id = data.get('message_id', 'unknown')
+            
+            if operator_id != int(config.MY_QQ_ID):
+                quote_tgmsgid = await msgid_mapping.qq_to_tg(message_id)
+                send_text = f"<blockquote>{locale.common('revoke_message')}</blockquote>"
+                if quote_tgmsgid:
+                    return await telegram_sender.send_text(chat_id, send_text, reply_to_message_id=quote_tgmsgid)
+            
+        elif notice_type == 'group_increase':
             group_id = data.get('group_id', 'unknown')
             user_id = data.get('user_id', 'unknown')
             operator_id = data.get('operator_id', 'unknown')
             
-            logger.info(f"   群组ID: {group_id}")
-            logger.info(f"   新成员: {user_id}")
             if operator_id != user_id:
                 logger.info(f"   邀请者: {operator_id}")
-                send_text = f"🔔 QQ群成员增加\n群组: {group_id}\n新成员: {user_id}\n邀请者: {operator_id}"
+                send_text = f"<blockquote>🔔 QQ群成员增加</blockquote>\n新成员: {user_id}\n邀请者: {operator_id}"
             else:
-                send_text = f"🔔 QQ群成员增加\n群组: {group_id}\n新成员: {user_id}"
+                send_text = f"<blockquote>🔔 QQ群成员增加</blockquote>\n新成员: {user_id}"
                 
         elif notice_type == 'group_decrease':
             group_id = data.get('group_id', 'unknown')
@@ -923,35 +1013,15 @@ async def _handle_notice_event(chat_id: int, data: Dict[str, Any]):
             sub_type = data.get('sub_type', 'unknown')
             action = "主动退群" if sub_type == "leave" else "被踢出群" if sub_type == "kick" else f"操作类型({sub_type})"
             
-            logger.info(f"   群组ID: {group_id}")
-            logger.info(f"   成员: {user_id}")
-            logger.info(f"   操作: {action}")
             if operator_id and operator_id != user_id:
                 logger.info(f"   操作者: {operator_id}")
-                send_text = f"🔔 QQ群成员减少\n群组: {group_id}\n成员: {user_id}\n操作: {action}\n操作者: {operator_id}"
+                send_text = f"<blockquote>🔔 QQ群成员减少</blockquote>\n成员: {user_id}\n操作: {action}\n操作者: {operator_id}"
             else:
-                send_text = f"🔔 QQ群成员减少\n群组: {group_id}\n成员: {user_id}\n操作: {action}"
-                
-        elif notice_type == 'group_recall' or notice_type == 'friend_recall':
-            group_id = data.get('group_id', 'unknown')
-            user_id = data.get('user_id', 'unknown')
-            operator_id = data.get('operator_id', 'unknown')
-            message_id = data.get('message_id', 'unknown')
-            
-            logger.info(f"   群组ID: {group_id}")
-            logger.info(f"   消息发送者: {user_id}")
-            logger.info(f"   撤回操作者: {operator_id}")
-            logger.info(f"   消息ID: {message_id}")
-            
-            if operator_id != int(config.MY_QQ_ID):
-                quote_tgmsgid = await msgid_mapping.qq_to_tg(message_id) or 0 if message_id else 0
-                send_text = f"<blockquote>メッセージを撤回しました！</blockquote>"
-            
-                return await telegram_sender.send_text(chat_id, send_text, reply_to_message_id=quote_tgmsgid)
-            
+                send_text = f"<blockquote>🔔 QQ群成员减少</blockquote>\n成员: {user_id}\n操作: {action}"
+        
         else:
             # 其他通知类型，显示关键字段
-            info_parts = [f"🔔 {type_name}"]
+            info_parts = [f"<blockquote>🔔 {type_name}</blockquote>"]
             important_fields = ['group_id', 'user_id', 'operator_id', 'sub_type', 'duration']
             for field in important_fields:
                 if field in data:
