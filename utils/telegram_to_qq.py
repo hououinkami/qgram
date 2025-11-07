@@ -11,6 +11,7 @@ import ffmpeg
 from telegram import Update
 
 import config
+from config import LOCALE as locale
 from api.qq_api import qq_api
 from api.telegram_sender import telegram_sender
 from service.telethon_client import get_client
@@ -59,7 +60,7 @@ async def process_telegram_update(update: Update) -> None:
         telethon_msg_id = await get_telethon_msg_id(telethon_client, abs(int(chat_id)), 'me', message.text, message_date)
 
         # 转发消息
-        qq_api_response = await forward_telegram_to_qq(chat_id, message, telethon_msg_id)
+        qq_api_response, error_msg = await forward_telegram_to_qq(chat_id, message, telethon_msg_id)
         
         logger.warning(f"📨 调试: {qq_api_response}")
 
@@ -67,6 +68,13 @@ async def process_telegram_update(update: Update) -> None:
         if qq_api_response:
             to_id = await contact_manager.get_qqid_by_chatid(chat_id)
             await add_send_msgid(qq_api_response, message_id, telethon_msg_id, to_id)
+        else:
+            if error_msg:
+                error_text = f"<blockquote>❌ {locale.common('forward_failed')}</blockquote>\n<blockquote expandable>{error_msg}</blockquote>"
+            else:
+                error_text = f"<blockquote>❌ {locale.common('forward_failed')}</blockquote>"
+            
+            await telegram_sender.send_text(chat_id, error_text, reply_to_message_id=message_id)
 
 # 转发函数
 async def forward_telegram_to_qq(chat_id: str, message, telethon_msg_id = None) -> bool:
@@ -101,70 +109,66 @@ async def forward_telegram_to_qq(chat_id: str, message, telethon_msg_id = None) 
     
             if message.reply_to_message:
                 # 回复消息
-                return await _send_telegram_reply(to_id, is_group, message)
+                send_resule = await _send_telegram_reply(to_id, is_group, message)
             elif msg_entities and is_url:
                 # 链接消息
-                return await _send_telegram_link(to_id, is_group, message)
+                send_resule = await _send_telegram_link(to_id, is_group, message)
             elif msg_entities and entity and entity.type == "expandable_blockquote":
                 # 转发群聊消息时去除联系人
                 text = text.split('\n', 1)[1]
-                return await _send_telegram_text(to_id, is_group, text)
+                send_resule = await _send_telegram_text(to_id, is_group, text)
             else:
                 # 纯文本消息
                 # 处理文本中的emoji
                 # processed_text = process_emoji_text(text)
-                return await _send_telegram_text(to_id, is_group, text)
+                send_resule = await _send_telegram_text(to_id, is_group, text)
             
         elif message.photo:
             # 发送附带文字
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 图片消息
-            return await _send_telegram_photo(to_id, is_group, message.photo)
+            send_resule = await _send_telegram_photo(to_id, is_group, message.photo)
             
         elif message.video:
             # 发送附带文字
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 视频消息
-            return await _send_telegram_video(to_id, is_group, message.video, chat_id, telethon_msg_id)
+            send_resule = await _send_telegram_video(to_id, is_group, message.video, chat_id, telethon_msg_id)
         
         elif message.sticker:
             # 贴纸消息
-            return await _send_telegram_sticker(to_id, is_group, message.sticker)
+            send_resule = await _send_telegram_sticker(to_id, is_group, message.sticker)
         
         elif message.voice:
             # 语音消息
-            return await _send_telegram_voice(to_id, is_group, message.voice)
+            send_resule = await _send_telegram_voice(to_id, is_group, message.voice)
         
         elif message.document:
             # 发送附带文字
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 文档消息
-            return await _send_telegram_document(to_id, is_group, message.document)
+            send_resule = await _send_telegram_document(to_id, is_group, message.document)
 
         elif message.location:
             # 定位消息
-            return await _send_telegram_location(to_id, is_group, message)
+            send_resule = await _send_telegram_location(to_id, is_group, message)
 
         else:
-            return False
-            
+            send_result = False
+        
+        # 发送结果处理
+        if send_result:
+            return send_result, ""
+        else:
+            return send_result, f"API{locale.common('error')}"
+        
     except Exception as e:
         logger.error(f"转发消息时出错: {e}")
         
-        # 直接在这里发送失败通知
-        try:
-            await telegram_sender.send_text(
-                chat_id=chat_id,
-                text=f"❌ 消息发送失败: {str(e)}",
-                reply_to_message_id=message.message_id
-            )
-        except Exception as notification_error:
-            logger.error(f"发送失败通知失败: {notification_error}")
-            
-        return False
+        return False, str(e)
 
 
 async def _send_telegram_text(to_id: str, is_group: bool, text: str) -> bool:
