@@ -70,9 +70,9 @@ async def process_telegram_update(update: Update) -> None:
             await add_send_msgid(qq_api_response, message_id, telethon_msg_id, to_id)
         else:
             if error_msg:
-                error_text = f"<blockquote>❌ {locale.common('forward_failed')}</blockquote>\n<blockquote expandable>{error_msg}</blockquote>"
+                error_text = f"<blockquote>{locale.common('forward_failed')}</blockquote>\n<blockquote expandable>{error_msg}</blockquote>"
             else:
-                error_text = f"<blockquote>❌ {locale.common('forward_failed')}</blockquote>"
+                error_text = f"<blockquote>{locale.common('forward_failed')}</blockquote>"
             
             await telegram_sender.send_text(chat_id, error_text, reply_to_message_id=message_id)
 
@@ -109,52 +109,52 @@ async def forward_telegram_to_qq(chat_id: str, message, telethon_msg_id = None) 
     
             if message.reply_to_message:
                 # 回复消息
-                send_resule = await _send_telegram_reply(to_id, is_group, message)
+                send_result = await _send_telegram_reply(to_id, is_group, message)
             elif msg_entities and is_url:
                 # 链接消息
-                send_resule = await _send_telegram_link(to_id, is_group, message)
+                send_result = await _send_telegram_link(to_id, is_group, message)
             elif msg_entities and entity and entity.type == "expandable_blockquote":
                 # 转发群聊消息时去除联系人
                 text = text.split('\n', 1)[1]
-                send_resule = await _send_telegram_text(to_id, is_group, text)
+                send_result = await _send_telegram_text(to_id, is_group, text)
             else:
                 # 纯文本消息
                 # 处理文本中的emoji
                 # processed_text = process_emoji_text(text)
-                send_resule = await _send_telegram_text(to_id, is_group, text)
+                send_result = await _send_telegram_text(to_id, is_group, text)
             
         elif message.photo:
             # 发送附带文字
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 图片消息
-            send_resule = await _send_telegram_photo(to_id, is_group, message.photo)
+            send_result = await _send_telegram_photo(to_id, is_group, message.photo)
             
         elif message.video:
             # 发送附带文字
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 视频消息
-            send_resule = await _send_telegram_video(to_id, is_group, message.video, chat_id, telethon_msg_id)
+            send_result = await _send_telegram_video(to_id, is_group, message.video, chat_id, telethon_msg_id)
         
         elif message.sticker:
             # 贴纸消息
-            send_resule = await _send_telegram_sticker(to_id, is_group, message.sticker)
+            send_result = await _send_telegram_sticker(to_id, is_group, message.sticker)
         
         elif message.voice:
             # 语音消息
-            send_resule = await _send_telegram_voice(to_id, is_group, message.voice)
+            send_result = await _send_telegram_voice(to_id, is_group, message.voice)
         
         elif message.document:
             # 发送附带文字
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 文档消息
-            send_resule = await _send_telegram_document(to_id, is_group, message.document)
+            send_result = await _send_telegram_document(to_id, is_group, message.document)
 
         elif message.location:
             # 定位消息
-            send_resule = await _send_telegram_location(to_id, is_group, message)
+            send_result = await _send_telegram_location(to_id, is_group, message)
 
         else:
             send_result = False
