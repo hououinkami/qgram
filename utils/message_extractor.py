@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Callable, Union
 
 from api.qq_api import qq_api
-from config import LOCALE as locale
+from config import locale
 
 logger = logging.getLogger(__name__)
 

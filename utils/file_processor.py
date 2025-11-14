@@ -1,9 +1,12 @@
 import asyncio
 import logging
+import re
 from io import BytesIO
-from typing import Callable, Any
+from pathlib import Path
+from typing import Callable, Any, Union, Optional
 
 from api.telegram_sender import telegram_sender
+from utils.sticker_converter import converter
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +21,9 @@ class AsyncFileProcessor:
         placeholder.seek(0)
         return placeholder
     
-    async def send_with_placeholder(self, file_type: str, file_name: str, 
-        chat_id: int, sender_name: str, 
-                                  download_func, *download_args, **download_kwargs) -> dict:
+    async def send_with_placeholder(self, file_type: str, file_name: str,
+                                    chat_id: int, sender_name: str, reply_to_message_id: int,
+                                    download_func, *download_args, **download_kwargs) -> dict:
         """
         先发送占位符，然后异步下载并更新真实文件
         """
@@ -30,7 +33,9 @@ class AsyncFileProcessor:
         
         # 统一发送为document，文件名为file_name
         response = await self.telegram_sender.send_document(
-            chat_id, placeholder_file, placeholder_caption, filename=file_name
+            chat_id, placeholder_file, placeholder_caption,
+            reply_to_message_id, 
+            filename=file_name
         )
         
         # 2. 异步下载并更新
@@ -40,7 +45,7 @@ class AsyncFileProcessor:
             asyncio.create_task(
                 self._download_and_update(
                     file_type,
-                    chat_id, message_id,  sender_name,
+                    chat_id, message_id, sender_name,
                     download_func, download_args, download_kwargs
                 )
             )
@@ -53,18 +58,44 @@ class AsyncFileProcessor:
         """异步下载文件并更新消息"""
         try:
             # 执行下载
-            file_data, filename = await download_func(*args, **kwargs)
+            result = await download_func(*args, **kwargs)
+
+            if len(result) == 3:
+                success, file_data, filename = result
+            elif len(result) == 2:
+                file_data, filename = result
+                success = file_data is not None
+            else:
+                success, file_data, filename = False, None, "未知错误"
             
-            if file_data:
-                # 使用edit_message_media方法，只替换媒体内容，不修改caption
-                await self.telegram_sender.edit_message_media(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    media=file_data,
-                    media_type=file_type,
-                    filename=filename,
-                    caption=sender_name
-                )
+            if success:
+                if file_type == 'sticker':
+
+                    match = re.search(r'<blockquote[^>]*>(.*?)</blockquote>', sender_name, re.DOTALL)
+                    sender_name_text = match.group(1) if match else sender_name
+
+                    webm_path = await converter.image_to_webp(file_data)
+                    # webm_path = await converter.gif_to_webm("/app/download/sticker/000.gif")
+
+                    # 贴纸特殊处理
+                    await self.replace_message_with_sticker(
+                        telegram_sender=self.telegram_sender,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        sticker_data=webm_path,
+                        original_caption=sender_name_text,
+                        filename=filename
+                    )
+                else:
+                    # 使用edit_message_media方法，只替换媒体内容，不修改caption
+                    await self.telegram_sender.edit_message_media(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        media=file_data,
+                        media_type=file_type,
+                        filename=filename,
+                        caption=sender_name
+                    )
                 
             else:
                 if filename != "企微图片":
@@ -73,6 +104,56 @@ class AsyncFileProcessor:
                 
         except Exception as e:
             logger.error(f"❌ 异步下载或更新过程中出错: {e}", exc_info=True)
+
+    async def replace_message_with_sticker(self, telegram_sender, chat_id: int, message_id: int, 
+                                        sticker_data: Union[BytesIO, bytes, str, Path], 
+                                        original_caption: str,
+                                        reply_to_message_id: Optional[int] = None,
+                                        filename: Optional[str] = None) -> Optional[Any]:
+        """
+        删除原有消息并用贴纸替换，内联键盘显示原消息的caption
+        
+        Args:
+            telegram_sender: TelegramSender实例
+            chat_id: 聊天ID
+            message_id: 要删除的原消息ID
+            sticker_data: 贴纸数据（BytesIO、bytes、文件路径或文件ID）
+            original_caption: 原消息的caption（将显示在内联键盘按钮中）
+            reply_to_message_id: 回复的消息ID（可选）
+            filename: 贴纸文件名（可选）
+            
+        Returns:
+            Message: 发送的贴纸消息对象，如果失败返回None
+        """
+        try:
+            # 1. 先发送贴纸（带有显示原caption的内联键盘）
+            sticker_message = await telegram_sender.send_sticker(
+                chat_id=chat_id,
+                sticker=sticker_data,
+                emoji="🫥",  # 默认贴纸表情
+                reply_to_message_id=reply_to_message_id,
+                filename=filename,
+                # 使用新的内联键盘功能显示原caption
+                title=original_caption
+            )
+            
+            # 2. 发送成功后删除原消息
+            if sticker_message:
+                try:
+                    await telegram_sender.delete_message(
+                        chat_id=chat_id,
+                        message_id=message_id
+                    )
+                    logger.info(f"✅ 成功替换消息 {message_id} 为贴纸 {sticker_message.message_id}")
+                except Exception as delete_error:
+                    logger.warning(f"⚠️ 贴纸发送成功但删除原消息失败: {delete_error}")
+                    # 即使删除失败，也返回贴纸消息（因为贴纸发送成功了）
+            
+            return sticker_message
+            
+        except Exception as e:
+            logger.error(f"❌ 替换消息为贴纸时出错: {e}", exc_info=True)
+            return None
 
 # 全局实例
 async_file_processor = AsyncFileProcessor(telegram_sender)

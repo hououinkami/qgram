@@ -11,7 +11,7 @@ import ffmpeg
 from telegram import Update
 
 import config
-from config import LOCALE as locale
+from config import locale
 from api.qq_api import qq_api
 from api.telegram_sender import telegram_sender
 from service.telethon_client import get_client
@@ -150,7 +150,7 @@ async def forward_telegram_to_qq(chat_id: str, message, telethon_msg_id = None) 
             if message.caption:
                 await _send_telegram_text(to_id, is_group, message.caption)
             # 文档消息
-            send_result = await _send_telegram_document(to_id, is_group, message.document)
+            send_result = await _send_telegram_document(to_id, is_group, message.document, chat_id, telethon_msg_id)
 
         elif message.location:
             # 定位消息
@@ -187,9 +187,8 @@ async def _send_telegram_photo(to_id: str, is_group: bool, photo: list) -> bool:
     file_id = photo[-1].file_id  # 最后一个通常是最大尺寸
     
     try:
-        download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
-        file_dir = os.path.join(download_dir, "image")
-        file_path = await tools.telegram_file_to_path(file_id, file_dir)
+        file_dir = config.FILE_DIR
+        file_path = await tools.get_telegram_file(file_id=file_id, save_file=True, save_dir=file_dir)
         
         api = send_api(to_id, is_group, [("image", "file", file_path)])
         
@@ -211,9 +210,8 @@ async def _send_telegram_video(to_id: str, is_group: bool, video, chat_id, telet
     duration = video.duration
     
     try:
-        download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
-        file_dir = os.path.join(download_dir, "video")
-        file_path = await tools.telegram_file_to_path(file_id, file_dir)
+        file_dir = config.VIDEO_DIR
+        file_path = await tools.get_telegram_file(file_obj=video, chat_id=int(chat_id), message_id=telethon_msg_id, save_file=True, save_dir=file_dir)
         
         api = send_api(to_id, is_group, [("video", "file", file_path)])
         
@@ -280,8 +278,7 @@ async def _send_telegram_voice(to_id: str, is_group: bool, voice):
     file_id = voice.file_id
     duration = voice.duration
     file_size = voice.file_size
-    download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
-    voice_dir = os.path.join(download_dir, "voice")
+    voice_dir = config.VOICE_DIR
     
     local_voice_path = None
     silk_path = None
@@ -326,7 +323,7 @@ async def _send_telegram_voice(to_id: str, is_group: bool, voice):
                 except Exception as e:
                     logger.warning(f"清理{file_type}失败 {file_path}: {e}")
 
-async def _send_telegram_document(to_id: str, is_group: bool, document) -> bool:
+async def _send_telegram_document(to_id: str, is_group: bool, document, chat_id, telethon_msg_id) -> bool:
     """发送文档消息到微信"""
     if not document:
         logger.error("未收到文档数据")
@@ -339,9 +336,8 @@ async def _send_telegram_document(to_id: str, is_group: bool, document) -> bool:
         file_size = document.file_size
         mime_type = document.mime_type
         
-        download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
-        file_dir = os.path.join(download_dir, "file")
-        file_path = await tools.telegram_file_to_path(file_id, file_dir)
+        file_dir = config.FILE_DIR
+        file_path = await tools.get_telegram_file(file_obj=document, chat_id=int(chat_id), message_id=telethon_msg_id, save_file=True, save_dir=file_dir)
         
         api = send_api(to_id, is_group, [("file", "file", file_path)])
         
@@ -535,8 +531,7 @@ async def _download_telegram_sticker(sticker) -> str:
         file_unique_id = sticker.file_unique_id
         
         # 设置下载目录
-        download_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "download")
-        sticker_dir = os.path.join(download_dir, "sticker")
+        sticker_dir = config.STICKER_DIR
         os.makedirs(sticker_dir, exist_ok=True)
         
         # 检查是否已存在文件

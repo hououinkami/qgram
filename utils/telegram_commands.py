@@ -12,8 +12,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import config
-from config import LOCALE as locale
-from api import wechat_login
+from config import locale
 from api.telegram_sender import telegram_sender
 from api.qq_api import qq_api
 from service.telethon_client import get_user_id
@@ -277,7 +276,7 @@ class BotCommands:
             
             # 发送搜索结果
             if avatar_url:
-                processed_photo_content = await tools.get_image_from_url(avatar_url)
+                processed_photo_content, _ = await tools.get_file_from_url(avatar_url)
 
             callback_data = {
                 "Opcode": 2,

@@ -7,6 +7,7 @@ from asyncio import Queue
 from io import BytesIO
 from typing import Any, Dict, Optional
 
+import aiofiles
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
 
@@ -14,13 +15,14 @@ import config
 from api import qq_contacts
 from api.qq_api import qq_api
 from api.telegram_sender import telegram_sender
-from config import LOCALE as locale
+from config import locale
 from service.telethon_client import get_client, get_user_id
 from utils import tools
 from utils.contact_manager import contact_manager
 from utils.file_processor import async_file_processor
 from utils.message_extractor import message_extractor
 from utils.message_mapper import msgid_mapping
+from utils.sticker_converter import converter
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +149,8 @@ async def _forward_image(chat_id: int, sender_info: str, message_data: Dict[str,
 
         return await async_file_processor.send_with_placeholder(
             'photo', f"[{locale.type('image')}]",
-            chat_id, caption,
-            tools.download_file_to_bytesio,
+            chat_id, caption, None,
+            tools.get_file_from_url,
             image_url, "photo"
         )
             
@@ -166,19 +168,59 @@ async def _forward_sticker(chat_id: int, sender_info: str, message_data: Dict[st
     """转发单张图片消息"""
     try:
         image_url = message_data.get('content', '')
-        text_content = message_data.get('text', '')
 
         # 构建 caption
         caption = sender_info.strip()
-        if text_content:
-            caption += f"\n{text_content}"
 
-        return await async_file_processor.send_with_placeholder(
-            'animation', f"[{locale.type('sticker')}].gif",
-            chat_id, caption,
-            tools.download_file_to_bytesio,
-            image_url, "sticker"
-        )
+        # 所有贴纸均采用动画形式发送
+        # return await async_file_processor.send_with_placeholder(
+        #     'animation', f"[{locale.type('sticker')}].gif",
+        #     chat_id, caption, None,
+        #     tools.get_file_from_url,
+        #     image_url, "sticker"
+        # )
+        
+        # 只将静态贴纸采用贴纸形式发送
+        match = re.search(r'<blockquote[^>]*>(.*?)</blockquote>', caption, re.DOTALL)
+        sender_name = match.group(1) if match else caption
+
+        # 下载贴纸文件
+        sticker_dir = config.STICKER_DIR
+        sticker_path, sticker_name = await tools.get_file_from_url(image_url, 'photo', True, sticker_dir)
+
+        # 获取后缀
+        file_ext = sticker_name.rsplit('.', 1)[-1] if '.' in sticker_name else ""
+        # 获取不含后缀的文件名
+        file_name_without_ext = sticker_name.rsplit('.', 1)[0] if '.' in sticker_name else sticker_name
+
+        if file_ext ==  "gif":
+            gif_info = await converter.analyze_gif(sticker_path)
+            is_animated = gif_info["is_animated"]
+        else:
+            is_animated = False
+        
+        if is_animated:
+            # 以动画形式发送
+            sticker_bytesio = await tools.local_file_to_bytesio(sticker_path)
+            return await telegram_sender.send_animation(chat_id, sticker_bytesio, sender_name)
+        else:
+            # 以贴纸形式发送
+            # 检查是否已经存在WebP文件
+            try:
+                webp_filename = sticker_name.replace(f'.{file_ext}', '.webp')
+
+                webp_filepath = os.path.join(EMOJI_DIR, webp_filename)
+
+                if await aiofiles.os.path.exists(webp_filepath):
+                    webp_file = webp_filepath
+                else:
+                    webp_file = await converter.image_to_webp(sticker_path)
+                    
+            except Exception as e:
+                logger.error(f"处理webp文件时出错: {e}")
+                webp_file = await converter.image_to_webp(sticker_path)
+
+            return await telegram_sender.send_sticker(chat_id, webp_file, title=sender_name)
             
     except Exception as e:
         logger.error(f"❌ 转发贴纸消息失败: {e}")
@@ -205,7 +247,7 @@ async def _forward_images(chat_id: int, sender_info: str, message_data: Dict[str
             logger.debug(f"   下载第 {i+1}/{len(image_list)} 张图片: {image_url}")
             
             # 从URL下载图片
-            image_bytesio, file_name = await tools.download_file_to_bytesio(image_url, "photo")
+            image_bytesio, file_name = await tools.get_file_from_url(image_url, "photo")
             
             if image_bytesio:
                 # 第一张图片添加caption（包含发送者信息和文本）
@@ -270,8 +312,8 @@ async def _forward_video(chat_id: int, sender_info: str, message_data: Dict[str,
 
         return await async_file_processor.send_with_placeholder(
             'video', f"[{locale.type('video')}]",
-            chat_id, caption,  # ✅ 使用包含文字的 caption
-            tools.download_file_to_bytesio,
+            chat_id, caption, None,
+            tools.get_file_from_url,
             video_url, "video"
         )
 
@@ -322,8 +364,8 @@ async def _forward_file(chat_id: int, sender_info: str, message_data: Dict[str, 
 
         return await async_file_processor.send_with_placeholder(
             'document', f"[{locale.type('file')}]",
-            chat_id, caption,  # ✅ 使用包含文字的 caption
-            tools.download_file_to_bytesio,
+            chat_id, caption, None,
+            tools.get_file_from_url,
             file_url, "file"
         )
     
@@ -467,17 +509,26 @@ async def _process_forward_content(chat_id: int, sender_info: str, forward_conte
                 
                 # 根据消息类型生成预览文本
                 if content_type == 'forward':
-                    # 嵌套转发 - 收集起来稍后递归处理
-                    nested_forward_id = forwarded_message_data.get('content', 0)
+                    # 嵌套转发 - 内容已经在 forwarded_msg 中了
+                    # 直接从 forwarded_msg 的 message 数组中获取嵌套内容
+                    nested_content = None
+                    
+                    # 从 message 数组中找到 forward 类型的数据
+                    for msg_item in forwarded_msg.get('message', []):
+                        if msg_item.get('type') == 'forward':
+                            nested_content = msg_item.get('data', {}).get('content', [])
+                            break
+                    
                     preview_lines.append(f"{indent}👤{display_name}: ")
                     preview_lines.append(f"{indent}[{locale.type('forward')}] (嵌套)")
                     
-                    # 收集嵌套转发信息
-                    nested_forwards.append({
-                        'msg_id': nested_forward_id,
-                        'sender': display_name,
-                        'depth': depth + 1
-                    })
+                    # 收集嵌套转发信息 - 直接传递内容而不是ID
+                    if nested_content:
+                        nested_forwards.append({
+                            'content': nested_content,  # 直接传递内容数组
+                            'sender': display_name,
+                            'depth': depth + 1
+                        })
                     
                 elif content_type == 'image':
                     # 单张图片
@@ -636,7 +687,7 @@ async def _process_forward_content(chat_id: int, sender_info: str, forward_conte
                         file_type = "photo" if media_type == 'photo' else "video"
                         
                         # 从URL下载媒体文件
-                        media_bytesio, file_name = await tools.download_file_to_bytesio(media_url, file_type)
+                        media_bytesio, file_name = await tools.get_file_from_url(media_url, file_type)
                         
                         if media_bytesio:
                             # 第一批的第一个媒体文件添加完整caption，其他批次添加批次信息
@@ -711,21 +762,14 @@ async def _process_forward_content(chat_id: int, sender_info: str, forward_conte
                     preview_response = await telegram_sender.send_text(chat_id, error_text)
         else:
             # 没有媒体文件，只发送预览文本
-            if depth == 0:
-                preview_response = await telegram_sender.send_text(chat_id, forward_preview)
+            preview_response = await telegram_sender.send_text(chat_id, forward_preview)
         
         # 递归处理嵌套转发
         for nested_forward in nested_forwards:
             try:
-                logger.info(f"处理嵌套转发 [深度: {nested_forward['depth']}]: {nested_forward['msg_id']}")
+                logger.info(f"处理嵌套转发 [深度: {nested_forward['depth']}], 来自: {nested_forward['sender']}")
                 
-                # 获取嵌套转发内容
-                payload = {
-                    "message_id": int(nested_forward['msg_id'])
-                }
-                
-                nested_forward_json = await qq_api("GET_FORWARD", payload)
-                nested_forward_content = nested_forward_json.get("data", {}).get("messages", [])
+                nested_forward_content = nested_forward['content']  # 直接使用已有的内容
                 
                 if nested_forward_content:
                     # 递归处理嵌套转发
@@ -737,11 +781,11 @@ async def _process_forward_content(chat_id: int, sender_info: str, forward_conte
                         depth=nested_forward['depth']
                     )
                 else:
-                    logger.warning(f"嵌套转发内容为空: {nested_forward['msg_id']}")
+                    logger.warning(f"嵌套转发内容为空, 来自: {nested_forward['sender']}")
                     
             except Exception as e:
-                logger.error(f"❌ 处理嵌套转发失败 [深度: {nested_forward['depth']}]: {e}")
-                error_text = f"❌ 嵌套转发处理失败 (来自: {nested_forward['sender']}): {str(e)}"
+                logger.error(f"❌ 处理嵌套转发失败 [深度: {nested_forward['depth']}]: {e}", exc_info=True)
+                error_text = f"🔄 嵌套转发 (来自: {nested_forward['sender']})\n❌ 处理失败: {str(e)}"
                 await telegram_sender.send_text(chat_id, error_text)
         
         logger.info(f"✅ 转发消息处理完成 [深度: {depth}]，共{len(forward_content)}条消息，{len(all_media)}个媒体文件，{len(nested_forwards)}个嵌套转发")

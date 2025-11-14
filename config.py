@@ -6,6 +6,14 @@ from utils.locales import Locale
 LANG = os.getenv("LANG", "zh")
 LOCALE = Locale(LANG)
 
+# 下载目录
+DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download")
+IMAGE_DIR = os.path.join(DOWNLOAD_DIR, "image")
+VIDEO_DIR = os.path.join(DOWNLOAD_DIR, "video")
+STICKER_DIR = os.path.join(DOWNLOAD_DIR, "sticker")
+FILE_DIR = os.path.join(DOWNLOAD_DIR, "file")
+VOICE_DIR = os.path.join(DOWNLOAD_DIR, "voice")
+
 # Telegram Bot
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:

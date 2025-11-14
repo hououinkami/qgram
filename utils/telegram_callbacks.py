@@ -10,7 +10,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from api import qq_contacts
-from config import LOCALE as locale
+from config import locale
 from utils import tools
 from api.telegram_sender import telegram_sender
 from api.qq_api import qq_api
