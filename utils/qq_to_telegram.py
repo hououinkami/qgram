@@ -758,8 +758,8 @@ async def _process_forward_content(chat_id: int, sender_info: str, forward_conte
             except Exception as e:
                 logger.error(f"❌ 发送转发消息媒体文件失败 [深度: {depth}]: {e}")
                 error_text = f"❌ 转发消息中的媒体文件发送失败 [深度: {depth}]: {str(e)}"
-                if depth == 0:
-                    preview_response = await telegram_sender.send_text(chat_id, error_text)
+                # 媒体文件发送出错，只发送预览文本
+                preview_response = await telegram_sender.send_text(chat_id, error_text)
         else:
             # 没有媒体文件，只发送预览文本
             preview_response = await telegram_sender.send_text(chat_id, forward_preview)
