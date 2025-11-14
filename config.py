@@ -4,7 +4,7 @@ from utils.locales import Locale
 
 # 语言
 LANG = os.getenv("LANG", "zh")
-LOCALE = Locale(LANG)
+locale = Locale(LANG)
 
 # 下载目录
 DOWNLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "download")
