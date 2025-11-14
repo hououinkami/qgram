@@ -2,6 +2,8 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
+from html import unescape
+from typing import Any, Dict, List, Optional, Union, Tuple
 from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
@@ -371,3 +373,120 @@ def escape_special_chars(text):
     text = text.replace('<', '&lt;')
     text = text.replace('>', '&gt;')
     return text
+
+def split_text(text: str, max_length: int) -> List[str]:
+    """
+    智能分割文本，保护HTML标签完整性
+    """
+    import re
+    
+    if len(text) <= max_length:
+        return [text]
+    
+    segments = []
+    remaining = text
+    
+    # Telegram HTML标签模式
+    tag_pattern = r'<(/?)(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a(?:\s[^>]*)?|tg-spoiler|blockquote|expandable_blockquote)(?:\s[^>]*)?>'
+    
+    while remaining:
+        if len(remaining) <= max_length:
+            segments.append(remaining)
+            break
+        
+        # 寻找最佳分割点
+        best_pos = max_length
+        
+        # 1. 优先在自然分割符处分割
+        split_chars = ['\n\n', '\n', '。', '！', '？', '.', '!', '?', '；', ';', '，', ',', ' ']
+        for char in split_chars:
+            pos = remaining.rfind(char, 0, max_length)
+            if pos > max_length * 0.7:  # 不要分割得太短
+                # 检查是否在HTML标签内
+                if not _is_inside_html_tag(remaining, pos + len(char), tag_pattern):
+                    best_pos = pos + len(char)
+                    break
+        
+        # 2. 如果在标签内，寻找标签外的安全位置
+        if best_pos == max_length:
+            for pos in range(max_length - 1, max(0, max_length - 100), -1):
+                if not _is_inside_html_tag(remaining, pos, tag_pattern):
+                    # 检查标签配对是否平衡
+                    if _is_tag_balanced(remaining[:pos], tag_pattern):
+                        best_pos = pos
+                        break
+        
+        segments.append(remaining[:best_pos])
+        remaining = remaining[best_pos:].lstrip()
+    
+    return segments
+
+def _is_inside_html_tag(text: str, pos: int, tag_pattern: str) -> bool:
+    """检查位置是否在HTML标签内部"""
+    import re
+    
+    # 找到位置前最近的 < 和 >
+    last_open = text.rfind('<', 0, pos)
+    last_close = text.rfind('>', 0, pos)
+    
+    # 如果最近的 < 在最近的 > 之后，说明在标签内
+    if last_open > last_close and last_open != -1:
+        # 验证这确实是一个有效的HTML标签
+        tag_end = text.find('>', last_open)
+        if tag_end != -1 and tag_end >= pos:
+            tag_content = text[last_open:tag_end + 1]
+            return bool(re.match(tag_pattern, tag_content))
+    
+    return False
+
+def _is_tag_balanced(text: str, tag_pattern: str) -> bool:
+    """检查HTML标签是否平衡（开闭标签配对）"""
+    import re
+    
+    tag_stack = []
+    
+    for match in re.finditer(tag_pattern, text):
+        tag_full = match.group(0)
+        is_closing = tag_full.startswith('</')
+        
+        # 提取标签名
+        tag_name_match = re.search(r'</?(\w+)', tag_full)
+        if not tag_name_match:
+            continue
+        tag_name = tag_name_match.group(1).lower()
+        
+        if is_closing:
+            # 闭合标签，从栈中移除对应的开放标签
+            for i in range(len(tag_stack) - 1, -1, -1):
+                if tag_stack[i] == tag_name:
+                    tag_stack.pop(i)
+                    break
+        else:
+            # 开放标签，添加到栈中
+            tag_stack.append(tag_name)
+    
+    return len(tag_stack) == 0
+
+def get_telegram_text_length(html_text: str) -> int:
+    """
+    计算Telegram中HTML格式文本的实际字符数（after entities parsing）
+    
+    Args:
+        html_text (str): 包含HTML标签的文本
+        
+    Returns:
+        int: 实际计入限制的字符数
+    """
+    if not html_text:
+        return 0
+    
+    # 1. 移除链接标签，只保留显示文本
+    text = re.sub(r'<a[^>]*href="[^"]*"[^>]*>(.*?)</a>', r'\1', html_text, flags=re.IGNORECASE | re.DOTALL)
+    
+    # 2. 移除其他所有HTML标签
+    text = re.sub(r'<[^>]+>', '', text)
+    
+    # 3. 解码HTML实体
+    text = unescape(text)
+    
+    return len(text)

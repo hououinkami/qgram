@@ -186,11 +186,11 @@ class TelegramSender:
         raise last_exception
 
     async def send_text(self, chat_id: Optional[int] = None, text: str = "", 
-                       reply_to_message_id: Optional[int] = None, 
-                       parse_mode: str = ParseMode.HTML, 
-                       disable_web_page_preview: bool = False,
-                       reply_markup: Optional[InlineKeyboardMarkup] = None,
-                       max_length: int = 4090):
+                    reply_to_message_id: Optional[int] = None, 
+                    parse_mode: str = ParseMode.HTML, 
+                    disable_web_page_preview: bool = False,
+                    reply_markup: Optional[InlineKeyboardMarkup] = None,
+                    max_length: int = 4090):
         """
         发送文本消息，支持超长文本自动分段发送
         
@@ -286,9 +286,9 @@ class TelegramSender:
                 raise FileNotFoundError(f"图片文件不存在: {photo_path}")
             photo_input = InputFile(photo_path.open('rb'), filename=photo_path.name)
         elif isinstance(photo, BytesIO):
-            photo_input = InputFile(photo, filename=f"{locale.type('image')}.jpg")
+            photo_input = InputFile(photo, filename=f"{locale.type(3)}.jpg")
         elif isinstance(photo, bytes):
-            photo_input = InputFile(BytesIO(photo), filename=f"{locale.type('image')}.jpg")
+            photo_input = InputFile(BytesIO(photo), filename=f"{locale.type(3)}.jpg")
         else:
             photo_input = photo
         
@@ -334,10 +334,10 @@ class TelegramSender:
             doc_input = InputFile(doc_path.open('rb'), 
                                  filename=filename or doc_path.name)
         elif isinstance(document, BytesIO):
-            doc_input = InputFile(document, filename=filename or locale.type('file'))
+            doc_input = InputFile(document, filename=filename or locale.type(6))
         elif isinstance(document, bytes):
             doc_input = InputFile(BytesIO(document), 
-                                 filename=filename or locale.type('file'))
+                                 filename=filename or locale.type(6))
         else:
             doc_input = document
         
@@ -389,10 +389,10 @@ class TelegramSender:
             video_input = InputFile(video_path.open('rb'), 
                                    filename=filename or video_path.name)
         elif isinstance(video, BytesIO):
-            video_input = InputFile(video, filename=filename or f"{locale.type('video')}.mp4")
+            video_input = InputFile(video, filename=filename or f"{locale.type(43)}.mp4")
         elif isinstance(video, bytes):
             video_input = InputFile(BytesIO(video), 
-                                   filename=filename or f"{locale.type('video')}.mp4")
+                                   filename=filename or f"{locale.type(43)}.mp4")
         else:
             video_input = video
         
@@ -447,10 +447,10 @@ class TelegramSender:
             audio_input = InputFile(audio_path.open('rb'), 
                                    filename=filename or audio_path.name)
         elif isinstance(audio, BytesIO):
-            audio_input = InputFile(audio, filename=filename or f"{locale.type('audio')}.mp3")
+            audio_input = InputFile(audio, filename=filename or f"{locale.type(34)}.mp3")
         elif isinstance(audio, bytes):
             audio_input = InputFile(BytesIO(audio), 
-                                   filename=filename or f"{locale.type('audio')}.mp3")
+                                   filename=filename or f"{locale.type(34)}.mp3")
         else:
             audio_input = audio
         
@@ -504,10 +504,10 @@ class TelegramSender:
             voice_input = InputFile(voice_path.open('rb'), 
                                    filename=filename or voice_path.name)
         elif isinstance(voice, BytesIO):
-            voice_input = InputFile(voice, filename=filename or f"{locale.type('voice')}.ogg")
+            voice_input = InputFile(voice, filename=filename or f"{locale.type(34)}.ogg")
         elif isinstance(voice, bytes):
             voice_input = InputFile(BytesIO(voice), 
-                                   filename=filename or f"{locale.type('voice')}.ogg")
+                                   filename=filename or f"{locale.type(34)}.ogg")
         else:
             voice_input = voice
         
@@ -626,10 +626,10 @@ class TelegramSender:
             animation_input = InputFile(animation_path.open('rb'), 
                                        filename=filename or animation_path.name)
         elif isinstance(animation, BytesIO):
-            animation_input = InputFile(animation, filename=filename or f"{locale.type('sticker')}.gif")
+            animation_input = InputFile(animation, filename=filename or f"{locale.type(47)}.gif")
         elif isinstance(animation, bytes):
             animation_input = InputFile(BytesIO(animation), 
-                                       filename=filename or f"{locale.type('sticker')}.gif")
+                                       filename=filename or f"{locale.type(47)}.gif")
         else:
             animation_input = animation
         

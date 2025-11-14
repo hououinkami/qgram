@@ -209,7 +209,7 @@ async def _forward_sticker(chat_id: int, sender_info: str, message_data: Dict[st
             try:
                 webp_filename = sticker_name.replace(f'.{file_ext}', '.webp')
 
-                webp_filepath = os.path.join(EMOJI_DIR, webp_filename)
+                webp_filepath = os.path.join(config.STICKER_DIR, webp_filename)
 
                 if await aiofiles.os.path.exists(webp_filepath):
                     webp_file = webp_filepath
